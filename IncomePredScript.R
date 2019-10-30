@@ -4,7 +4,7 @@ if(!require(readr)) install.packages("readr")
 
 # Read in 1994 Census Data file from Kaggle
 
-census_income <- read_csv("https://raw.github.com/mmercer3/Income-Prediction-Project/census income.csv")
+census_income <- read_csv("./censusincome.csv")
 
 # Select and wrangle outcome variable (income)
 # and 10 predictor variables/features
