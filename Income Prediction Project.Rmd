@@ -1,0 +1,674 @@
+---
+title: "Income Prediction Project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+INTRODUCTION
+
+The issue of income prediction has long interested researchers and individuals alike. With income tied closely to social/economic class and quality of life, there is clear value in developing a model that can successfully predict an individual's income. 
+
+For this project, a clean dataset of 1994 United States census income data curated by Kaggle will be analyzed and utilized in an attempt to develop a successful model. The project goals are two-fold:
+
+1. How accurately can income be predicted from three sets of predictors: one demographic, one achievement-based, and one monetary?
+2. Which predictors are most influential in predicting income?
+
+Practical implications of this type of research may suggest that income disparity could be partially addressed by individuals selecting different educational or occupational choices. On the other hand, if demographic predictors are most influential, this research may suggest that larger-scale biases/prejudices need to be more directly confronted in an attempt to address the income gap. 
+
+The dataset used for this project has one outcome variable: individual adult income. This variable is binary: income is coded either as less than or equal to $50,000 or as more than $50,000. Essentially, the model will be asked to predict lower-income versus higher-income individuals.
+
+One important note about income distribution in our dataset: over 75% of individuals in our dataset have incomes below $50,000. Although at first glance this is not ideal, this breakdown actually likely mirrors the actual income breakdown in the U.S.
+
+The dataset also contains 10 predictors. The four demographic predictors are: sex (binary), race (categorical), marital status (categorical), and age (continuous). The four achievement-based predictors are: education (categorical), occupation (categorical), work sector (categorical; called workclass), and hours per week worked (continuous). The two monetary predictors are: capital gain (continuous) and capital loss (continuous).
+
+First the data will be wrangled so that similar and/or excessively small categories are combined. Next, various machine learning models will be applied to the dataset in an attempt to predict income, with the most successful models combined into an ensemble. Ultimately, the model that is most successful (considering accuracy, F1 scores, sensitivity, and specificity) will be applied to the validation set to determine final accuracy and F1 scores. This model along with the most influenctial predictors (determined by the variable importance function) will be used to draw tentative/preliminary conclusions about income in the United States.
+
+
+METHODS/ANALYSIS
+
+To begin, we will import the dataset, wrangle the data to group similar and/or excessively small categories, and create training and validation sets. The training set will be 90% of our original dataset and the validation set will be 10%.
+
+```{r wrangle data, echo=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(caret)) install.packages("caret")
+if(!require(readr)) install.packages("readr")
+
+# Read in 1994 Census Data file from Kaggle
+
+census_income <- read_csv("https://raw.github.com/mmercer3/Income-Prediction-Project/census income.csv")
+
+# Select and wrangle outcome variable (income)
+# and 10 predictor variables/features
+# 4 predictors (sex, race, age, marital.status) are demographic
+# 4 predictors (education, occupation, hours.per.week, workclass) are more action/achievement-based
+# 2 predictors (capital.gain, capital.loss) are monetary
+
+income_data <- census_income %>%
+  mutate(marital.status.cond=ifelse((marital.status=="Married-civ-spouse" |
+                                      marital.status=="Married-AF-spouse" |
+                                      marital.status=="Married-spouse-absent"),
+                                    "Married", marital.status)) %>%
+  mutate(education.cond=ifelse((education=="Preschool" |
+                                  education=="1st-4th" |
+                                  education=="5th-6th" |
+                                  education=="7th-8th"),
+                               "Below-HS", education)) %>%
+  mutate(education.cond=ifelse((education.cond=="9th" |
+                                  education.cond=="10th" |
+                                  education.cond=="11th" |
+                                  education.cond=="12th"),
+                               "Some-HS", education.cond)) %>%
+  mutate(workclass.cond=ifelse((workclass=="Federal-gov" |
+                                  workclass=="State-gov" |
+                                  workclass=="Local-gov"),
+                               "Government", workclass)) %>%
+  mutate(workclass.cond=ifelse((workclass.cond=="Without-pay" |
+                                  workclass.cond=="Never-worked"),
+                               "No-Pay", workclass.cond)) %>%
+  mutate(workclass.cond=ifelse((workclass.cond=="Self-emp-inc" |
+                                  workclass.cond=="Self-emp-not-inc"),
+                               "Self-employed", workclass.cond)) %>%
+  mutate(workclass.cond=ifelse((workclass.cond=="?"),
+                               "Unknown", workclass.cond)) %>%
+  mutate(occupation.cond=ifelse((occupation=="?" |
+                                   occupation=="Armed-Forces"),
+                               "Unknown-or-Armed-Forces", occupation)) %>%
+  select(income, education.cond, hours.per.week, occupation.cond,
+         race, sex, marital.status.cond, age, workclass.cond,
+         capital.gain, capital.loss)
+
+# Create train and validation sets
+
+set.seed(1, sample.kind="Rounding")
+
+test_index <- createDataPartition(y=income_data$income, times=1, p=0.1, list=FALSE)
+train <- income_data[-test_index, ]
+validation <- income_data[test_index, ]
+```
+
+Next, the training set will be split again to create a secondary training set to use for cross-validation and model selection. The primary training set (used to train the models) will be 90% of the training set while the secondary training set (used to cross-validate and select the best model) will be 10% of the training set.
+
+```{r split again, echo=FALSE}
+# Split the train set to create second train set for cross-validation purposes
+
+set.seed(1, sample.kind="Rounding")
+
+test_index2 <- createDataPartition(y=train$income, times=1, p=0.1, list=FALSE)
+train1 <- train[-test_index2, ]
+train2 <- train[test_index2, ]
+```
+
+Now exploratory data analysis will be conducted on each of the categorical predictors to see whether they should be utilized in the model. The training set will be grouped by these variables and then the percentage of each group with incomes at or below $50,000 will be displayed.
+
+```{r explore data, echo=FALSE}
+# Investigate data
+# Group by different variables to see group probabilities of making <=50K
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(sex) %>%
+  summarize(income_prob=mean(income_num))
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(race) %>%
+  summarize(income_prob=mean(income_num))
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(marital.status.cond) %>%
+  summarize(income_prob=mean(income_num))
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(education.cond) %>%
+  summarize(income_prob=mean(income_num))
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(occupation.cond) %>%
+  summarize(income_prob=mean(income_num))
+
+train1 %>%
+  mutate(income_num=ifelse(income=="<=50K",1,0)) %>%
+  group_by(workclass.cond) %>%
+  summarize(income_prob=mean(income_num))
+```
+
+For each of these categorical variables, there are significant group differences in terms of the probability of having an income at or below $50,000. 
+
+For the demographic variables, the following groups are most likely to have high incomes (above $50,000):
+1. Males (predictor: sex)
+2. Whites and Asians/Pacific Islanders (predictor: race)
+3. Married Individuals (predictor: marital status)
+
+For the achievement-based variables, the following groups are most likely to have high incomes:
+1. Individuals with a Bachelors degree or above (predictor: education)
+2. Individuals who attend Professional School (predictor: education)
+3. Executive/Managerial and Professional-Specialty Occupations (predictor: occupation)
+4. Individuals who are self-employed or employed by the government (predictor: workclass)
+
+For continuous variables, some data visualization needs to occur to explore at what values of that variable individuals are more likely to make lower or higher incomes.
+
+```{r density plots, echo=FALSE}
+# Use density plots to view income breakdown for continuous variables
+
+train1 %>% ggplot(aes(hours.per.week, col=income)) + geom_density()
+
+train1 %>% ggplot(aes(age, col=income)) + geom_density()
+
+train1 %>% ggplot(aes(capital.gain, col=income)) + geom_density()
+
+train1 %>% ggplot(aes(capital.loss, col=income)) + geom_density()
+```
+
+For age, a demographic continuous variable, those making higher incomes skew much older overall. The exception appears to be with the 70 and older age group, which skews back toward lower incomes. This is not surprisingly since 70 represents a typical retirement age where we would expect individual incomes to drop considerably.
+
+For hours per week worked, an achievement-based continuous variable, those making higher incomes skew towards higher hours worked, with very few higher income individuals working fewer than 40 hours and with over 75 hours per week worked being populated almost exclusively by the higher income crowd.
+
+For capital gain and capital loss, continuous monetary variables, most individuals (of any income brakcet) report 0 in both categories. However, individuals that did report any gains or losses overwhelmingly look to be in the higher income crowd. Again, this is not surprisingly since individuals with disposable incomes are far more likely to be involved in activities that could potentially create these gains or losses.
+
+Based on this exploratory data analysis and visualization, all of the above variables should be included in the model.
+
+We'll start with an rpart model, which will allow us to visualize which predictors are primarily useful in predicting income and in which ways. 
+
+To visualize the three different categories of predictors, we'll make three different rpart models with each category before combining all categories into one final rpart model.
+
+
+DEMOGRAPHIC RPART MODEL
+
+We'll start with creating an rpart model based only on the demographic predictors:
+
+```{r demographic rpart, echo=FALSE}
+# Begin modeling
+# Train rpart models to see how 3 different groups of predictors perform
+# Demographics model
+
+set.seed(1,sample.kind="Rounding")
+
+train_rpart_dem <- train(income~sex+race+marital.status.cond+age,
+                         method="rpart",
+                         data=train1)
+
+train_rpart_dem$finalModel
+varImp(train_rpart_dem$finalModel)
+
+predict_rpart_dem <- predict(train_rpart_dem, train2)
+accuracy_rpart_dem <- mean(predict_rpart_dem==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_rpart_dem
+
+confusionMatrix(data=factor(predict_rpart_dem),
+                reference=factor(train2$income))
+```
+
+
+The accuracy for the demographic model is 0.7878, which is a good start. However, it is important to note that there is a significant gap between sensitivity (the model correctly predicting lower incomes) and specificity (the model correctly predicting higher incomes).
+
+Since we observe this difference and we also observe that lower incomes have a much higher probability of occuring in the dataset, we'll want to use something more nuanced that just accuracy to determine model success. We'll use the F1 score as a measure of balanced accuracy.
+
+F1 Score
+```{r, echo=FALSE}
+# Use F-1 score as a measure of balanced accuracy
+
+F_1_rpart_dem <- F_meas(data=factor(predict_rpart_dem),
+                        reference=factor(train2$income))
+F_1_rpart_dem
+```
+
+The F1 score for the demographic rpart model is 0.8609, with being married, being white, and having an age between 35.5 and 59.5 serving as the key predictors for higher incomes. In fact, the model only predicts an individual to make more than $50,000 if all of these predictors apply.
+
+
+ACHIEVEMENT RPART MODEL
+
+We'll now compare this to the achievement model. In an equitable world, we would expect the achievement model (which includes educational attainment as well as occupation and work sector choice) to be a much more successful model than the demographic one.
+
+```{r achievement rpart, echo=FALSE}
+# Achievement model
+
+set.seed(1, sample.kind="Rounding")
+
+train_rpart_ach <- train(income~education.cond+occupation.cond
+                         +hours.per.week+workclass.cond,
+                         method="rpart",
+                         data=train1)
+
+train_rpart_ach$finalModel
+varImp(train_rpart_ach$finalModel)
+
+predict_rpart_ach <- predict(train_rpart_ach, train2)
+accuracy_rpart_ach <- mean(predict_rpart_ach==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_rpart_ach
+
+confusionMatrix(data=factor(predict_rpart_ach),
+                reference=factor(train2$income))
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_rpart_ach <- F_meas(data=factor(predict_rpart_ach),
+                        reference=factor(train2$income))
+
+F_1_rpart_ach
+```
+
+
+The influenctial predictors here for predicting incomes over $50,000 are working at least 43.5 hours per week and being employed in Executive/Managerial or Professional-Specialty occupations.  Having higher levels of education (high school graduate or bachelors or above) is also included in the model's variable importance function.
+
+The accuracy and F1 scores are slightly higher than the scores for the demographic model, but not significantly so. What is most interesting is that the sensitivity of the model increased significantly (from 0.8652 to 0.9506) while the specificity score, which was already low in our demographics model, plummeted (from 0.5439 to 0.2932). While this model is excellent at predicting when a low income individual is low income, it is terrible at correctly predicting that a high income individual is high income.
+
+
+MONETARY RPART MODEL
+
+Lastly, we will examine the monetary model for comparative purposes:
+
+```{r monetary rpart, echo=FALSE}
+# Monetary model
+
+set.seed(1, sample.kind="Rounding")
+
+train_rpart_mo <- train(income~capital.gain+capital.loss,
+                         method="rpart",
+                         data=train1)
+
+train_rpart_mo$finalModel
+varImp(train_rpart_mo$finalModel)
+
+predict_rpart_mo <- predict(train_rpart_mo, train2)
+accuracy_rpart_mo <- mean(predict_rpart_mo==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_rpart_mo
+
+confusionMatrix(data=factor(predict_rpart_mo),
+                reference=factor(train2$income))
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_rpart_mo <- F_meas(data=factor(predict_rpart_mo),
+                        reference=factor(train2$income))
+                        
+F_1_rpart_mo
+```
+
+The accuracy and F1 scores are higher than for either of the other two models. However, while sensitivity has risen even higher when compared to the achievement model (from 0.9506 to 0.9838), specificity has declined again (from 0.2932 to 0.2833).
+
+The variables used to predict when income will be above $50,000 is either that capital gains are more than $5119 or capital losses are more than $1820. This model's lack of specificity is probably not surprising since it is unable to account for the fact that many higher income individuals do not necessarily have capital gains or capital losses.
+
+
+COMBINED RPART MODEL
+
+WIth the demographic model performing better with prediciting higher income individuals and the other two models performing better at predicting lower income individuals, we will combine all three into one rpart model:
+
+```{r combined rpart, echo=FALSE}
+# Combine all predictors into combined rpart model
+
+set.seed(1, sample.kind="Rounding")
+
+train_rpart <- train(income~.,
+                      method="rpart",
+                      tuneGrid=data.frame(cp=seq(0.0,0.2,len=25)),
+                      data=train1)
+
+train_rpart$finalModel
+
+predict_rpart <- predict(train_rpart, train2)
+accuracy_rpart <- mean(predict_rpart==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_rpart
+
+confusionMatrix(data=factor(predict_rpart),
+                reference=factor(train2$income))
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_rpart <- F_meas(data=factor(predict_rpart),
+                        reference=factor(train2$income))
+
+F_1_rpart
+```
+
+This model is much improved over the previous three models. Accuracy and F1 scores are higher than all other models. Sensitivity is slightly below the achievement and monetary models, but specificity is vastly improved over these two models and slightly improved over the demographics model.
+
+The rpart tree provides a nuanced picture that includes predictors from all three categories, with being married, having significant capital gains or losses, having a Bachelor's or Master's degree, working more than 34.5 hours in a week, and being employed in a Professional-Specialty occupation all contributing to the model predicting someone to have an income above $50,000.
+
+What's most surprising about this combined model is the fact that marital status is the first tree split. According to this model, if an individual is unmarried, their only path to a higher income is to have captial gains above $7140. Marriage is not a predictor that is usually associated with income in common discourse, but there could be multiple possible explanations. Perhaps those who choose to follow a conventional path and get married are also those who choose more traditional, money-oriented career paths. Perhaps marriage provides the stability (especially for those with children) for individuals to seek out improved career and educational opportunities. Although this limited dataset doesn't permit us to answer these questions, this would be an interesting avenue for further exploration.
+
+We'll now create other models using other modeling techniques to see if any of these techniques are effective at capturing the relationships between our outcome and our predictor variables.
+
+
+RANDOM FOREST MODEL
+
+We'll try out random forest as a natural extension of rpart. However, we'll have to first split the data again to allow the random forest model to be created on a much more manageable chunk of the data.
+
+```{r, echo=FALSE}
+# Partition the data further to train random forest and k-nearest neighbors models
+
+set.seed(1, sample.kind="Rounding")
+
+test_index3 <- createDataPartition(y=train1$income, times=1, p=0.75, list=FALSE)
+trainrf <- train1[-test_index3, ]
+trainrf2 <- train1[test_index3, ]
+
+# Train Random Forest model
+
+set.seed(1, sample.kind="Rounding")
+
+train_rf <- train(income~.,
+                  method="rf",
+                  data=trainrf)
+
+train_rf$finalModel
+plot(train_rf)
+
+varImp(train_rf)
+
+predict_rf<- predict(train_rf, train2)
+accuracy_rf <- mean(predict_rf==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_rf
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_rf <- F_meas(data=factor(predict_rf),
+                        reference=factor(train2$income))
+
+F_1_rf
+```
+
+The random forest model performs decently on accuracy (0.8444) and provides an F1 score over 0.9 (0.9004). The variables identified as being most important in constructing this model are age, marital status, capital gain, hours worked per week, and capital loss. These variables are similar to the variables influential in the combined rpart model, with the notable addition of age.
+
+Combined rpart and random forest models perform well on income prediction, but we'll test out a variety of other models (knn, glm, lda, and qda) to see if any of these can improve prediction accuracy.
+
+
+K-NEAREST NEIGHBORS MODEL
+
+Next we'll create a k-nearest neighbors (knn) model. We'll need to use the same partioned training set we used for random forest in order for the knn function to run in a reasonable time frame.
+
+```{r, echo=FALSE}
+# Train K-Nearest Neighbors model
+
+train_knn <- train(income~.,
+                   method="knn",
+                   tuneGrid=data.frame(k=seq(1,15,1)),
+                   data=trainrf)
+
+train_knn$finalModel
+
+predict_knn <- predict(train_knn, train2)
+accuracy_knn <- mean(predict_knn==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_knn
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_knn <- F_meas(data=factor(predict_knn),
+                 reference=factor(train2$income))
+
+F_1_knn
+```
+
+The k-nearest neighbors model does not perform as well as the random forest model, but accuracy and F1 scores are only slightly lower, so we'll include this model in our list of candidates for the ensemble model.
+
+
+GENERALIZED LINEAR MODEL
+
+Next up we'll try a generalized linear model (glm).
+
+```{r, echo=FALSE}
+# Train additional models (glm, lda, qda) to see if accuracy improves
+# Glm model
+
+train_glm <- train(income~.,
+                   method="glm",
+                   data=train1)
+
+varImp(train_glm)
+
+predict_glm <- predict(train_glm, train2)
+accuracy_glm <- mean(predict_glm==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_glm
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_glm <- F_meas(data=factor(predict_glm),
+                 reference=factor(train2$income))
+
+F_1_glm
+```
+
+The glm model seems promising, with a higher accuracy and F1 score than any of the other models that have been tested so far. 
+
+The top five variables that are most influential in this model are: marital status, age, hours worked per week, capital gain, and capital loss. Again, this model shows that variables from all three categories (demographic, achievement, and monetary) are essential for creating a robust and accurate model.
+
+
+LINEAR DISCRIMINANT ANALYSIS MODEL
+
+Next we'll try out a linear discriminant analysis (lda) model:
+
+```{r, echo=FALSE}
+# Lda model
+
+train_lda <- train(income~.,
+                   method="lda",
+                   data=train1)
+
+train_lda$finalModel
+
+predict_lda <- predict(train_lda, train2)
+accuracy_lda <- mean(predict_lda==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_lda
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_lda <- F_meas(data=factor(predict_lda),
+                  reference=factor(train2$income))
+
+F_1_lda
+```
+
+The lda model does not perform as well as the glm model, but its  accuracy and F1 scores are in line with the other tested models (including combined rpart, random forest, and k-nearest neighbors).
+
+This model provides some additional insight as to why being married is such an influential predictor in previous models. Of individuals in the training set with incomes above $50,000, 86% are married. There is also some interesting insight here in regards to hours worked per week. On average, those with lower incomes work 38.79 hours per week while those with higher incomes work 45.43 hours per week. Both of these observations are in line with the exploratory data analysis we performed earlier, but this different method of calculating group means provides an additional way of looking at the data.
+
+In this model, education and marital status emerge as the predictors having the strongest effect on the model, with the coefficients for doctorate level education and being married having the highest absolute value.
+
+
+QUADRATIC DISCRIMINANT ANALYSIS MODEL
+
+Lastly, we will test out a quadratic discriminant analysis (qda) model.
+
+```{r, echo=FALSE}
+# Qda model
+# Qda model won't work with workclass.cond variable even after wrangling in multiple ways
+# Qda accepts all other variables as predictors
+
+train_qda <- train(income~sex+marital.status.cond+race+age
+                   +education.cond+hours.per.week+occupation.cond
+                   +capital.gain+capital.loss,
+                   method="qda",
+                   data=train1)
+
+predict_qda <- predict(train_qda, train2)
+accuracy_qda <- mean(predict_qda==train2$income)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy_qda
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1_qda <- F_meas(data=factor(predict_qda),
+                  reference=factor(train2$income))
+
+F_1_qda
+```
+
+One note about the qda model: it refused to accept workclass as a predictor, even after workclass was wrangled and re-categorized in multiple ways. N/As were elminated, small categories were combined, etc., but qda refused to run with workclass. As a result, the qda model uses only the other nine predictors.
+
+The accuracy and F1 scores of the qda model are significantly below any of the other combined models we've previously tested, so this model should be excluded from the ensemble. 
+
+
+ENSEMBLE MODEL
+
+Afer examining the results of all the models tested out, five appear to be clearly superior, as judged by accuracy and F1 scores. As a result, the following five models will be included in the ensemble model: combined rpart, random forest, k-nearest neighbors, generalized linear model, and linear discriminant analysis. Since there are five models being assembled, whatever three or models predict for a given individual is what the ensemble will use as its prediction.
+
+```{r, echo=FALSE}
+# Based on accuracy and F1 results, ensemble should include: glm, lda, knn, combined rpart, and rf
+# Create ensemble model and compare accuracy and F-1 scores across all models
+
+predictions <- bind_cols(glm=predict_glm, lda=predict_lda,
+                         rpart=predict_rpart,
+                         rf=predict_rf, knn=predict_knn)
+
+predictions_num <- ifelse(predictions=="<=50K",1,0)
+ensemble <- rowSums(predictions_num)
+predict_ensemble <- ifelse(ensemble>=3, "<=50K", ">50K")
+accuracy_ensemble <- mean(predict_ensemble==train2$income)
+F_1_ensemble <- F_meas(data=factor(predict_ensemble),
+                       reference=factor(train2$income))
+
+confusionMatrix(data=factor(predict_ensemble),
+                            reference=factor(train2$income))
+
+accuracy <- bind_cols(glm=accuracy_glm, lda=accuracy_lda,
+                      rpart=accuracy_rpart,
+                      rf=accuracy_rf, knn=accuracy_knn,
+                      ensemble=accuracy_ensemble)
+```
+
+Accuracy
+```{r, echo=FALSE}
+accuracy
+```
+
+F1 Score
+```{r, echo=FALSE}
+F_1 <- bind_cols(glm=F_1_glm, lda=F_1_lda,
+                               rpart=F_1_rpart,
+                               rf=F_1_rf, knn=F_1_knn,
+                               ensemble=F_1_ensemble)
+
+F_1
+```
+
+Specificity, accuracy, and F1 score are all optimized using the ensemble model. Sensitivity is slightly lower than in several other models, but still very high (at 0.9492).
+
+The ensemble model has therefore been selected and will be used against the validation set to determine final accuracy and F1 scores.
+
+
+RESULTS
+
+The ensemble model has been judged to be the best model to use for predicting income. Now this ensemble model will be tested against the validation set to determine final accuracy numbers.
+
+```{r, echo=FALSE}
+# The ensemble model is an improvement for both accuracy and F-1 (balanced accuracy)
+# Test final model (ensemble) against validation set
+
+predict_glm_v <- predict(train_glm, validation)
+accuracy_glm_v <- mean(predict_glm_v==validation$income)
+F_1_glm_v <- F_meas(data=factor(predict_glm_v),
+                       reference=factor(validation$income))
+
+predict_lda_v <- predict(train_lda, validation)
+accuracy_lda_v <- mean(predict_lda_v==validation$income)
+F_1_lda_v <- F_meas(data=factor(predict_lda_v),
+                    reference=factor(validation$income))
+
+predict_rpart_v <- predict(train_rpart, validation)
+accuracy_rpart_v <- mean(predict_rpart_v==validation$income)
+F_1_rpart_v <- F_meas(data=factor(predict_rpart_v),
+                    reference=factor(validation$income))
+
+predict_rf_v <- predict(train_rf, validation)
+accuracy_rf_v <- mean(predict_rf_v==validation$income)
+F_1_rf_v <- F_meas(data=factor(predict_rf_v),
+                      reference=factor(validation$income))
+
+predict_knn_v <- predict(train_knn, validation)
+accuracy_knn_v <- mean(predict_knn_v==validation$income)
+F_1_knn_v <- F_meas(data=factor(predict_knn_v),
+                   reference=factor(validation$income))
+
+predictions_v <- bind_cols(glm=predict_glm_v, lda=predict_lda_v,
+                         rpart=predict_rpart_v,
+                         rf=predict_rf_v, knn=predict_knn_v)
+
+predictions_num_v <- ifelse(predictions_v=="<=50K",1,0)
+ensemble_v <- rowSums(predictions_num_v)
+predict_ensemble_v <- ifelse(ensemble_v>=3, "<=50K", ">50K")
+accuracy_ensemble_v <- mean(predict_ensemble_v==validation$income)
+F_1_ensemble_v <- F_meas(data=factor(predict_ensemble_v),
+                       reference=factor(validation$income))
+
+confusionMatrix(data=factor(predict_ensemble_v),
+                reference=factor(validation$income))
+```
+
+Final Accuracy
+```{r, echo=FALSE}
+accuracy_ensemble_v
+```
+
+Final F1 Score
+```{r, echo=FALSE}
+F_1_ensemble_v
+```
+
+Final F1 and accuarcy scores are not as high as with the training test set which is not surprising since the training test set was used for cross-validation and model selection. However, the F1 score is still above 0.9, which is a good sign for the robustness and accuracy of the developed model. 
+
+As seen in the confusion matrix, sensitivity and specificity scores are also slightly lower than they were with the training test set. 
+
+Unfortunately, specificity remains a real concern, with a value just below 0.6. While our model is highly successful in correctly identifying those earning $50,000 or less, it is much less successful at identifying those who earn more than $50,000. It is important to note that the demographic predictors are most responsible for the improvements in specificity, since the monetary and achievement models had specificity levels at strikingly low levels (below 0.3). It appears that, while predictors such as education, occupation, and capital gains are effective at telling us when someone is not making much money, additional factors such as age and marital status, and to a lesser extent race and gender, are better equipped to alert us to the fact that an individual is making a higher income. This could make sense given that those advancing in age (up until retirement) are more likely to simultaneously be advancing their careers (and thus their incomes). Being married may, as discussed above, also be an indicator for traditional life and career progression or it may simply provide a support net that makes it easier for individuals to make certain educational and occupational decisions.
+
+Overall, after examining variable importance for multiple models used in the ensemble, the most influential variables appear to include: age, marital status, occupation, education, hours worked per week, capital gains, and capital losses. Sex, race, and workclass did not appear as the most influential predictors in any of the combined models. The fact that workclass was minimally influential makes sense since the identified work sectors are such broad categories and, as shown in the developed models, the specific occupation done within a certain sector is much more correlated with income. The fact that sex and race are not key variables in the combined models is great news in terms of societal equity. However, exploratory data analysis (and the rpart demographic model) did show significant gender and racial differences in income. More study is needed to see what impact sex and race have on income when other variables such as education and occupation are held steady.
+
+
+CONCLUSION
+
+The developed model is reasonably effective at predicting income and provides compelling evidence that demographic, achievement, and monetary predictors are essential to successful predictions. The model's final F1 score is impressive, but unfortunately the specificity score remains low.
+
+One reason for this, which is also a key limitation of this model, is that no information is provided in the dataset in regards to state or region. Economies (including average salaries, housing costs, etc.) vary greatly from region to region and even from urban areas to rural areas within the same region. It may be that the specificity rate (correctly predciting higher-income individuals) which we were unable to boost above 0.6 could be greatly improved by adding one or more geographic predictors. It would be interesting to explore how much of the still unexplained variability in the dataset can actually be explained by geographical predictors.
+
+Another limitation to this model is that the data is 25 years old, which, especially for social and economic data, is considerably out of date. Since a new census is about to be conducted in the U.S., it would be interesting to use this new data (once generated) to build a new model and then compare/contrast these models to see key similarities and differences. I would be interested to know whether or not the same predictors are still the most influential. A comparable study using up-to-date data could provide interesting insight into societal/economic trends.
+
+One avenue for future study would be looking deeper into the connection between marital status and income. As discussed above, marital status could be an indicator of more traditional life and educational choices which may in turn yield higher incomes. Non-married individuals may also tend to be more vulnerable members of society: LGBTQ individuals, unmarried parents, etc. More research could reveal a clearer picture of the correlation between being married and having a higher income.
+
+Finally, further study should examine income as a continuous, rather than binary, variable. ALthough the binary analysis conducted here does reveal valuable information, it would be interesting to look at the complexities of income in more depth. Someone making $20,000 is very different from someone making $49,000. In the same manner, someone making $51,000 is not nearly as high income as someone making $200,000. The next test for our model would be examining how well it can be extrapolated to predict exact income levels.
